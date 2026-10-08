@@ -3,47 +3,93 @@ name: Build Zingora APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Find Android SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+
+          if [ ! -d "$SDK_ROOT/cmdline-tools" ]; then
+            echo "Android SDK command-line tools not found: $SDK_ROOT"
+            exit 1
+          fi
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK_ROOT="$ANDROID_HOME"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print | sort -V | tail -n 1)"
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found"
+            exit 1
+          fi
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Install Android SDK components
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
       - name: Extract Zingora project
+        shell: bash
         run: |
-          unzip -o zingora-android-apk-builder.zip -d project
+          set -euxo pipefail
 
-      - name: Build APK
-        run: gradle -p project assembleDebug
+          ZIP_FILE="$(find . -maxdepth 5 -type f -name 'zingora-android-apk-builder.zip' -print -quit)"
 
-      - name: Upload APK
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: zingora-android-apk-builder.zip not found."
+            echo "Upload the builder ZIP to the repository root."
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/android-project"
+          unzip -o "$ZIP_FILE" -d "$GITHUB_WORKSPACE/android-project"
+
+          if [ ! -f "$GITHUB_WORKSPACE/android-project/settings.gradle" ]; then
+            echo "ERROR: settings.gradle not found after extraction."
+            find "$GITHUB_WORKSPACE/android-project" -maxdepth 5 -type f
+            exit 1
+          fi
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gradle -p "$GITHUB_WORKSPACE/android-project" \
+            --no-daemon assembleDebug
+
+      - name: Upload installable APK
         uses: actions/upload-artifact@v4
         with:
           name: zingora-apk
-          path: project/app/build/outputs/apk/debug/app-debug.apk
+          path: android-project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
