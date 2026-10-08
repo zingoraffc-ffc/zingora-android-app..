@@ -3,6 +3,8 @@ name: Build Zingora APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -29,11 +31,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Install Android SDK
+      - name: Install Android SDK components
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Extract project
-        run: unzip -o zingora-android-apk-builder.zip -d project
+      - name: Extract Zingora project
+        run: |
+          unzip -o zingora-android-apk-builder.zip -d project
 
       - name: Build APK
         run: gradle -p project assembleDebug
